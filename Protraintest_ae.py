@@ -18,6 +18,8 @@ import optparse
 import time
 from dataset.dataset import PointCloudDataset_Cached, PointCloudDataset
 from model.ProGenerator import GeneratorVAE
+from model.Point_VAE import PointVAE
+from model.SegNet import SegNet
 from utils.utils import init_weights
 from utils.loss import MaskedL1
 from Protraintester import ChamfersDistance, TrainTester
@@ -29,21 +31,34 @@ def main(args):
 	kwargs = {'num_workers':4, 'pin_memory':True}
 
 	print("loading train data ...")
-	trainset = PointCloudDataset_Cached(args.train_json)
+	trainset = PointCloudDataset(args.train_json)
 	train_loader = torch.utils.data.DataLoader(
 		trainset,
 		batch_size=args.batch_size,
 		shuffle= True,**kwargs,
 	)
 	print("loading test data ...")
-	testset = PointCloudDataset_Cached(args.test_json)
+	testset = PointCloudDataset(args.test_json)
 	test_loader = torch.utils.data.DataLoader(
 		testset,
 		batch_size=args.test_batch_size,
 		shuffle= True,**kwargs
 	)
 	print("Initialize cache={}".format(time.time()-starter_time))
+
+	im_encoder = SegNet(input_channels=3, output_channels=3)
+	pointVAE = PointVAE(args=args)
+	#net = GeneratorVAE(
+	#	encoder_dim=(3, 3),
+	#	grid_dims=(32, 32, 1),
+	#	Generate1_dims=259,
+	#	Generate2_dims=1091,
+	#	Generate3_dims=1219,
+	#	args=args,
+	#)
 	net = GeneratorVAE(
+		im_encoder=im_encoder,
+		pointVAE=pointVAE,
 		encoder_dim=(3, 3),
 		grid_dims=(32, 32, 1),
 		Generate1_dims=259,
@@ -51,7 +66,7 @@ def main(args):
 		Generate3_dims=1219,
 		args=args,
 	)
-	init_weights(net, init_type="xavier")
+	#init_weights(net, init_type="xavier")
 
 	logger = logging.getLogger()
 	file_log_handler = logging.FileHandler(args.log_dir + args.log_filename)
@@ -68,12 +83,25 @@ def main(args):
 
 	criterion_I = MaskedL1().to(args.device)
 	criterion_PTC = ChamfersDistance().to(args.device)
+
+	optimizer_image = torch.optim.Adam(
+		im_encoder.parameters(),
+		lr=args.lr_image,
+		betas=(args.adam_beta1, 0.999),
+		weight_decay=args.weight_decay,
+	)
+	optimizer_VAE = torch.optim.Adam(
+		pointVAE.parameters(),
+		lr=args.lr_vae,
+		betas=(args.adam_beta1, 0.999),
+		weight_decay=args.weight_decay,
+	)
 	optimizer = torch.optim.Adam(
 		net.parameters(),
 		lr=args.lr,
 		betas=(args.adam_beta1, 0.999),
 		weight_decay=args.weight_decay,
-	)
+		)
 
 	lr_scheduler = torch.optim.lr_scheduler.StepLR(
 		optimizer,
@@ -89,6 +117,8 @@ def main(args):
 		criterion_I=criterion_I,
 		criterion_PTC=criterion_PTC,
 		optimizer=optimizer,
+		optimizer_image=optimizer_image,
+		optimizer_VAE=optimizer_VAE,
 		lr_scheduler=lr_scheduler,
 		logger=logger,
 		args=args,
@@ -177,6 +207,14 @@ if __name__ == "__main__":
 					  dest="lr", type=float,
 					  default=1e-4,
 					help='learning rate')
+	parser.add_option("--lr-vae",
+					  dest="lr_vae", type=float,
+					  default=1e-5,
+					  help='learning rate of VAE')
+	parser.add_option("--lr-image",
+					  dest="lr_image", type=float,
+					  default=1e-4,
+					  help='learning rate of image')
 	parser.add_option("--input-dim",
 					  dest="input_dim", type=int,
 					  default=3,

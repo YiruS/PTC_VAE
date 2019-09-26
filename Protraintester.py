@@ -88,11 +88,11 @@ class Stats(object):
 
 class TrainTester(object):
 
-	def __init__(self, net, criterion_I, criterion_PTC, optimizer, lr_scheduler, logger, args):
+	def __init__(self, net, criterion_I, criterion_PTC, optimizer, optimizer_image, optimizer_VAE, lr_scheduler, logger, args):
 		self.net = net
 		self.criterion_I = criterion_I
 		self.criterion_PTC = criterion_PTC
-		self.optimizer = optimizer
+		self.optimizer, self.optimizer_image, self.optimizer_VAE = optimizer, optimizer_image, optimizer_VAE
 
 		self.logger = logger
 
@@ -231,7 +231,18 @@ class TrainTester(object):
 				gridv = Variable(self.grid).to(self.device)
 
 			self.optimizer.zero_grad()
-			ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, z_mu, z_sigma, _, _ = \
+			self.optimizer_image.zero_grad()
+			self.optimizer_VAE.zero_grad()
+			#ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, z_mu, z_sigma, _, _ = \
+			#	self.net(
+			#		x=image,
+			#		grid=gridv,
+			#		proMatrix=proMatrix,
+			#		category=category,
+			#	)
+
+			ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, \
+			z_mu_x, z_sigma_x, z_mu_y, z_sigma_y, z_mu_z, z_sigma_z,  _, _ = \
 				self.net(
 					x=image,
 					grid=gridv,
@@ -241,6 +252,9 @@ class TrainTester(object):
 
 			## image reconstruction loss: mask L1 ##
 			loss_image_recons = self.criterion_I(image, img_recons, mask)
+			loss_IM = self.lambda_image_loss*loss_image_recons
+			loss_IM.backward(retain_graph=True)
+			self.optimizer_image.step()
 			## ptc loss: chamfer distance ##
 			loss_ptc_init = self.criterion_PTC(ptcloud_init, ptcloud)
 			loss_ptc_interm = self.criterion_PTC(ptcloud_interm, ptcloud)
@@ -248,21 +262,27 @@ class TrainTester(object):
 			## VAE loss ##
 			# https://arxiv.org/abs/1312.6114 (Appendix B)
 			# 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-			# KLD_element = z_mu.pow(2).add_(z_logvar.exp()).mul_(-1).add_(1).add_(z_logvar)
-			# loss_KL = torch.sum(KLD_element).mul_(-0.5)
-			KLD_element = torch.pow(z_mu, 2)+torch.pow(z_sigma, 2)-torch.log(1e-8 + torch.pow(z_sigma, 2))-1.0
-			loss_KL = 0.5 * torch.sum(KLD_element)
+			#KLD_element = torch.pow(z_mu, 2)+torch.pow(z_sigma, 2)-torch.log(1e-8 + torch.pow(z_sigma, 2))-1.0
+			KLD_element_x = torch.pow(z_mu_x, 2) + torch.pow(
+				z_sigma_x, 2) - torch.log(1e-8 + torch.pow(z_sigma_x, 2)) - 1.0
+			KLD_element_y = torch.pow(z_mu_y, 2) + torch.pow(
+				z_sigma_y, 2) - torch.log(1e-8 + torch.pow(z_sigma_y, 2)) - 1.0
+			KLD_element_z = torch.pow(z_mu_z, 2) + torch.pow(
+				z_sigma_z, 2) - torch.log(1e-8 + torch.pow(z_sigma_z, 2)) - 1.0
+			loss_KL = 0.5 * (torch.sum(KLD_element_x) + torch.sum(KLD_element_y) + torch.sum(KLD_element_z))
 			## reconstruction loss ##
 			loss_ptc_recons = self.criterion_PTC(ptcloud_prim, ptcloud)
+			loss_vae = self.lambda_kl*loss_KL+self.lambda_ptc_recons*loss_ptc_recons
+			loss_vae.backward(retain_graph=True)
+			self.optimizer_VAE.step()
 
-			loss_all = self.lambda_image_loss*loss_image_recons + \
-					   self.lambda_ptc_init*loss_ptc_init + \
+			#loss_all = self.lambda_image_loss*loss_image_recons + \
+			loss_all = self.lambda_ptc_init*loss_ptc_init + \
 					   self.lambda_ptc_interm*loss_ptc_interm + \
-					   self.lambda_ptc_fine*loss_ptc_fine + \
-					   self.lambda_ptc_recons*loss_ptc_recons + \
-					   self.lambda_kl*loss_KL
-
-			loss_all.backward()
+					   self.lambda_ptc_fine*loss_ptc_fine
+					   #self.lambda_ptc_recons*loss_ptc_recons + \
+					   #self.lambda_kl*loss_KL
+			loss_all.backward(retain_graph=True)
 			self.optimizer.step()
 
 			batch_loss_image = self.lambda_image_loss*loss_image_recons.item()
@@ -365,7 +385,14 @@ class TrainTester(object):
 				gridv = Variable(self.grid).to(self.device)
 
 			with torch.set_grad_enabled(False):
-				ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, z_mu, z_logvar, h, w = \
+				#ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, z_mu, z_logvar, h, w = \
+				#	self.net(
+				#		x=image,
+				#		grid=gridv,
+				#		proMatrix=proMatrix,
+				#		category=category,
+				#	)
+				ptcloud_init, ptcloud_prim, ptcloud_interm, ptcloud_fine, img_recons, _, _, _, _, _, _, h, w = \
 					self.net(
 						x=image,
 						grid=gridv,
@@ -495,7 +522,7 @@ class TrainTester(object):
 		sys.stdout.flush()
 
 		self.logger.info('Initial testing ...')
-		self.test(epoch=0, loader=test_loader)
+		#self.test(epoch=0, loader=test_loader)
 		for epoch in range(1, self.total_epochs+1):
 			new_train_loss = self.train(
 				epoch=epoch,

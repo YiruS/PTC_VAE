@@ -210,6 +210,8 @@ class PointProjection(nn.Module):
 class GeneratorVAE(nn.Module):
 
 	def __init__(self,
+				 pointVAE,
+				 im_encoder,
 				 encoder_dim,
 				 grid_dims,
 				 Generate1_dims,
@@ -220,7 +222,8 @@ class GeneratorVAE(nn.Module):
 		super(GeneratorVAE, self).__init__()
 		self.args = args
 
-		self.im_encoder = SegNet(input_channels=encoder_dim[0], output_channels=encoder_dim[1])
+		#self.im_encoder = SegNet(input_channels=encoder_dim[0], output_channels=encoder_dim[1])
+		self.im_encoder = im_encoder
 		init_weights(self.im_encoder, init_type="kaiming")
 		self.N = grid_dims[0] * grid_dims[1]
 		# self.G1 = PointGeneration(Generate1_dims)
@@ -230,7 +233,8 @@ class GeneratorVAE(nn.Module):
 		init_weights(self.G2, init_type="xavier")
 		self.G3 = FoldingNet(indim=Generate3_dims)
 		init_weights(self.G3, init_type="xavier")
-		self.pointVAE = PointVAE(args=args)
+		#self.pointVAE = PointVAE(args=args)
+		self.pointVAE = pointVAE
 		init_weights(self.pointVAE, init_type="xavier")
 
 		self.P1 = PointProjection()
@@ -246,7 +250,8 @@ class GeneratorVAE(nn.Module):
 		x_init, x_init_feat = self.G1(x)
 
 		## VAE ##
-		x_primitive, z_mu, z_logvar = self.pointVAE(x_init)
+		#x_primitive, z_mu, z_logvar = self.pointVAE(x_init)
+		x_primitive, z_mu_x, z_sigma_x, z_mu_y, z_sigma_y, z_mu_z, z_sigma_z = self.pointVAE(x_init)
 
 		## 1st projection ##
 		pixel_feature_p1, h_p1, w_p1 = self.P1(featlist, x_primitive, proMatrix)
@@ -264,7 +269,10 @@ class GeneratorVAE(nn.Module):
 		x = torch.cat((x_intermediate, pixel_feature_p2, x_interm_feat, x_init_feat), 2)  # BxNx(3+960+128+128)
 		x_fine, _ = self.G3.forward(x)
 
-		return x_init, x_primitive, x_intermediate, x_fine, img_recons, z_mu, z_logvar, h_p2, w_p2
+		#return x_init, x_primitive, x_intermediate, x_fine, img_recons, z_mu, z_logvar, h_p2, w_p2
+		return x_init, x_primitive, x_intermediate, x_fine, img_recons, \
+			   z_mu_x, z_sigma_x, z_mu_y, z_sigma_y, z_mu_z, z_sigma_z,\
+			   h_p2, w_p2
 
 
 
